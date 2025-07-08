@@ -1,0 +1,10 @@
+langchain
+langchain_community
+pypdf
+langchain_google_genai
+langchain_groq
+streamlit 
+re
+langchain_core
+uvicorn
+fastapi
