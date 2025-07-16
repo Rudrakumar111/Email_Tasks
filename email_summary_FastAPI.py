@@ -1,82 +1,112 @@
-
 import os
 import json
 import re
+import queue
+import copy
+from typing import List
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from langchain_groq.chat_models import ChatGroq
-from langchain.prompts import PromptTemplate
-
-groq_api_key = os.getenv("GROQ_API_KEY")
+import google.generativeai as genai
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 # Initialize FastAPI app
 app = FastAPI(title="Email Summarizer API")
 
 # Input schema
-class EmailInput(BaseModel):
-    from_email: str
-    to_email: str
+class Email(BaseModel):
+    id_: str
+    from_: str
+    to: List[str]
+    cc: List[str] 
+    bcc: List[str]
     subject: str
     body: str
+    is_parent: bool
+    parent_email_id: str 
 
-# Output
-class EmailSummary(BaseModel):
-    from_: str
-    to: str
-    subject_summary: str
-    body_summary: str
+class EmailThread(BaseModel):
+    emails: List[Email]
+    thread_id: str
+    email_count: int
 
-# LangChain model
-llm = ChatGroq(
-    model_name="llama3-8b-8192",
-    groq_api_key=groq_api_key,
-    temperature=0.2
+load_dotenv()
+
+# Set up Google Generative AI client
+os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
+messages = [
+    SystemMessage(content="you are intelligent chat bot i need to give summrized subject and body"),
+    HumanMessage(content="{}")
+]
+
+prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system", """Summarize emails in 1-2 lines using the subject and body. Include sender name naturally. Don't use phrases like "This email from" or "This is a summary."
+            """
+        ),
+        (
+            "user", """ From : {from}  
+                        Subject: {subject}
+                        Body :{body} 
+                        Read 'From', 'Subject' and 'Body' and give me one meaningful summary."""
+        )
+    ]
 )
 
-# Prompt Template
-prompt = PromptTemplate(
-    input_variables=["email_text"],
-    template="""
-You are an expert at summarizing emails.
 
-Given the full raw email below, extract the following in JSON format:
-- "from": sender's email address
-- "to": recipient's email address
-- "subject_summary": a clean, brief summary of the subject
-- "body_summary": a concise summary of the body but give me summary at least 1/8 part size compared to body.
-
-Email:
-{email_text}
-
-Return ONLY valid JSON in this format:
-{{
-  "from": "...",
-  "to": "...",
-  "subject_summary": "...",
-  "body_summary": "..."
-}}
-"""
-)
+chain = prompt | llm | StrOutputParser()
+summary_list={}
 
 # Endpoint
-@app.post("/summarize-email", response_model=EmailSummary)
-def summarize_email(data: EmailInput):
-    email_text = f"Subject: {data.subject}\nTo: {data.to_email}\nFrom: {data.from_email}\n\n{data.body}"
-    
-    formatted_prompt = prompt.format(email_text=email_text)
-    response = llm.invoke(formatted_prompt)
+@app.post("/email/summarize")
+def summarize_email(data:EmailThread):
+    print("API called...")
+    summary = """"""
+    for email in data.emails:
+        if email.is_parent:
 
-    match = re.search(r'\{.*?\}', response.content, re.DOTALL)
-    if not match:
-        raise HTTPException(status_code=400, detail="Model response did not contain valid JSON.")
+            if(summary_list.get(data.thread_id) is None):
+                summary = chain.invoke(
+                    {
+                        "from":email.from_,
+                        "to":email.to,
+                        "subject":email.subject,
+                        "body" : email.body,
+                    }
+                    )
 
-    try:
-        parsed = json.loads(match.group(0))
-        return {
-            "from_": parsed["from"],
-            "to": parsed["to"],
-            "subject_summary": parsed["subject_summary"],
-            "body_summary": parsed["body_summary"]
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error parsing JSON: {str(e)}")
+        else:
+            prev_summaries=""
+            for idx,summary in enumerate(summary_list[data.thread_id]):
+                prev_summaries += summary + f"Summary {idx}\n\n"
+
+            print(prev_summaries)
+
+            summary = chain.invoke(
+                {
+                    "from":email.from_,
+                    "to":email.to,
+                    "subject":email.subject,
+                    "body" : email.body + "\n" + prev_summaries
+
+                }
+            )
+
+        try:
+            if(len(summary) > 0):
+                if(email.is_parent):
+                    summary_list[data.thread_id] = [summary]
+                else:
+                    summary_list[data.thread_id].append(summary)
+            else:
+                raise HTTPException(status_code=500, detail=f"Server error : {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error parsing JSON: {str(e)}")
+
+    return {"summaries": summary_list}

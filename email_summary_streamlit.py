@@ -1,18 +1,26 @@
 import os
 import json
+import google.generativeai as genai
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_groq.chat_models import ChatGroq
 from langchain.prompts import PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
 import streamlit as st
 import re
 
-groq_api_key = os.getenv("GROQ_API_KEY")
 
-llm = ChatGroq(
-    model_name="llama3-8b-8192",  # Best balance for summarization
-    groq_api_key=groq_api_key,
-    temperature=0.2
-)
+google_api_key = os.getenv("GOOGLE_API_KEY")
+
+# llm = ChatGroq(
+#     model_name="llama3-8b-8192",  # Best balance for summarization
+#     groq_api_key=groq_api_key,
+#     temperature=0.2
+# )
+genai.configure(api_key=google_api_key)
+llm = genai.GenerativeModel("gemini-2.5-flash")
+
 
 loader = PyPDFLoader("C:/Users/Admin/Desktop/AI-ML_QB/Email_Tasks/AI_Email_Dataset.pdf")  
 pages = loader.load()
